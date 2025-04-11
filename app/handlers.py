@@ -1,13 +1,11 @@
 from aiogram import F, Router
 from aiogram.filters import CommandStart, Command
-from aiogram.types import Message
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from app.database import create_table, add_homework, get_all_homework, delete_homework,delete_old_homework
 
-from app.database import create_table, add_homework, get_all_homework
 
 router = Router()  # router = Dispatcher
 
@@ -19,12 +17,20 @@ class Add(StatesGroup):
     subject = State()
     home_work = State()
 
+    delete_homework_date = State()
+    delete_homework_subject = State()
 
 
 
-@router.message(CommandStart())
+
+@router.message(Command("start"))
 async def cmd_start(message: Message):
-    await message.answer("Я бот с ДЗ. Используйте команду /add для добавления задания и команду /list для просмотра списка дз.")
+    kb = [
+        [KeyboardButton(text="/list")],
+        [KeyboardButton(text="/add")]
+    ]
+    keyboard = ReplyKeyboardMarkup(keyboard=kb,resize_keyboard=True)
+    await message.answer("Я бот с ДЗ. Используйте кнопки /add для добавления задания и /list для просмотра списка дз.", reply_markup=keyboard)
 
 @router.message(Command("list"))
 async def list_homework(message: Message, state: FSMContext):
@@ -34,6 +40,9 @@ async def list_homework(message: Message, state: FSMContext):
         await message.answer("📭 На данный момент домашних заданий нет!")
         return
 
+    # Сортируем по дате (в формате ДД.ММ.ГГГГ) и затем по предмету
+    homework_list.sort(key=lambda hw: (hw[0].split('.')[::-1], hw[1]))
+
     hlist = "📌 <b>Актуальное домашнее задание:</b>\n\n"
 
     for hw in homework_list:
@@ -41,6 +50,41 @@ async def list_homework(message: Message, state: FSMContext):
         hlist += f"📅 <b>{hw_date}</b>\n📖 <b>{subject}</b>\n📝 {task}\n\n"
 
     await message.answer(hlist, parse_mode="HTML")
+
+
+#----------------------------------------------------/delete--------------------------------------------------------------------------------------------
+
+@router.message(Command("delete"))
+async def delete(message: Message, state: FSMContext):
+    global homework_date, homework_subject
+    await state.set_state(Add.delete_homework_date)
+    msg = await message.answer("📅 Введите дату (например, 05.11.2025):")
+    await state.update_data(bot_id=msg.message_id)
+
+@router.message(Add.delete_homework_date)
+async def delete_date(message: Message, state: FSMContext):
+    global homework_date
+    data = await state.get_data()
+    bot_id = data.get("bot_id")
+    user_id = message.message_id
+
+    homework_date = message.text
+    await state.set_state(Add.delete_homework_subject)
+    msg = await message.answer("📖 Выберите предмет:")#
+    await state.update_data(bot_id=msg.message_id)
+
+    await message.bot.delete_message(chat_id=message.chat.id, message_id=bot_id) # удаление последнего сообщения бота
+    await message.bot.delete_message(chat_id=message.chat.id, message_id=user_id) # удаление последнего сообщения юзера
+
+@router.message(Add.delete_homework_subject)
+async def delete_homework_entry(message: Message, state: FSMContext):
+    
+    homework_subject = message.text
+    delete_homework(homework_date, homework_subject)  # вызов функции удаления ДЗ
+    
+    await message.answer("✅ Домашнее задание удалено.")
+    await state.clear()
+
 
 
 
@@ -60,13 +104,15 @@ def get_subject_keyboard():
 
 
 # Обработчик команды /add
+# Обработчик ввода даты
 @router.message(Command("add"))
 async def add(message: Message, state: FSMContext):
+    delete_old_homework() #удаляем старое дз
     await state.set_state(Add.date)
     msg = await message.answer("📅 Введите дату (например, 05.11.2025):")
     await state.update_data(bot_id=msg.message_id)
 
-# Обработчик ввода даты
+
 @router.message(Add.date)
 async def add_date(message: Message, state: FSMContext):
     data = await state.get_data()
@@ -133,3 +179,4 @@ async def add_home_work(message: Message, state: FSMContext):
 
     await message.answer(f"✅ ДЗ добавлено!\n\n📅 Дата: {date}\n📖 Предмет: {subject}\n📝 Задание: {homework}")
     await state.clear()
+
